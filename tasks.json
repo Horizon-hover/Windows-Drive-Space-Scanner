@@ -8,6 +8,7 @@
                 "-fdiagnostics-color=always",
                 "-g",
                 "${file}",
+                "-std=c++23",
                 "-o",
                 "${fileDirname}\\${fileBasenameNoExtension}.exe"
             ],
