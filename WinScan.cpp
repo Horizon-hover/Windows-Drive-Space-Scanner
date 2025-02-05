@@ -28,25 +28,25 @@ SOFTWARE.
 #include <vector>
 #include <algorithm>
 #include <filesystem>
+#include <format> // C++20
+#include <fstream>
+#include <limits>
 
 namespace fs = std::filesystem;
 
 // Function to convert bytes to a more readable format
 std::string formatSize(ULONGLONG size) {
     const char* suffix[] = { "B", "KB", "MB", "GB", "TB" };
-    char length = sizeof(suffix) / sizeof(suffix[0]);
     int i = 0;
     double dblByte = static_cast<double>(size);
 
-    if (size > 1024) {
-        for (i = 0; (size / 1024) > 0 && i < length - 1; i++, size /= 1024) {
-            dblByte = size / 1024.0;
-        }
+    while (size >= 1024 && i < 4) {
+        dblByte = size / 1024.0;
+        size /= 1024;
+        i++;
     }
 
-    char output[200];
-    sprintf_s(output, "%.02lf %s", dblByte, suffix[i]);
-    return std::string(output);
+    return std::format("{:.2f} {}", dblByte, suffix[i]);
 }
 
 // Function to calculate the size of a directory
@@ -54,8 +54,8 @@ ULONGLONG calculateDirectorySize(const fs::path& path) {
     ULONGLONG totalSize = 0;
     try {
         for (const auto& entry : fs::recursive_directory_iterator(path, fs::directory_options::skip_permission_denied)) {
-            if (fs::is_regular_file(entry.status())) {
-                totalSize += fs::file_size(entry.path());
+            if (entry.is_regular_file()) {
+                totalSize += entry.file_size();
             }
         }
     } catch (const fs::filesystem_error& e) {
@@ -64,14 +64,26 @@ ULONGLONG calculateDirectorySize(const fs::path& path) {
     return totalSize;
 }
 
-// Function to display directory sizes
+// Function to display directory sizes with progress indicator
 void displayDirectorySizes(const fs::path& path) {
     try {
         std::vector<std::pair<std::string, ULONGLONG>> directorySizes;
+        int totalDirs = 0, processedDirs = 0;
+
+        // Count total directories
+        for (const auto& entry : fs::directory_iterator(path, fs::directory_options::skip_permission_denied)) {
+            if (fs::is_directory(entry.status())) {
+                totalDirs++;
+            }
+        }
+
+        // Process directories
         for (const auto& entry : fs::directory_iterator(path, fs::directory_options::skip_permission_denied)) {
             if (fs::is_directory(entry.status())) {
                 ULONGLONG dirSize = calculateDirectorySize(entry.path());
                 directorySizes.push_back({ entry.path().string(), dirSize });
+                processedDirs++;
+                std::cout << "\rProcessing: " << processedDirs << "/" << totalDirs << " directories...";
             }
         }
 
@@ -79,6 +91,7 @@ void displayDirectorySizes(const fs::path& path) {
             return b.second < a.second; // Sort in descending order
         });
 
+        std::cout << "\n";
         for (const auto& dir : directorySizes) {
             std::cout << dir.first << ": " << formatSize(dir.second) << std::endl;
         }
@@ -131,7 +144,6 @@ void scanMainDrive() {
 
 // Function to scan attached drives
 void scanAttachedDrives() {
-    // Get the logical drives on the system
     DWORD driveMask = GetLogicalDrives();
     if (driveMask == 0) {
         std::cerr << "Error getting logical drives: " << GetLastError() << std::endl;
@@ -152,21 +164,27 @@ void scanAttachedDrives() {
     }
 }
 
-// Function to scan all drives
+// Function to scan all drives and display a summary
 void scanAllDrives() {
-    // Get the logical drives on the system
     DWORD driveMask = GetLogicalDrives();
     if (driveMask == 0) {
         std::cerr << "Error getting logical drives: " << GetLastError() << std::endl;
         return;
     }
 
+    ULONGLONG totalUsedSpace = 0;
     for (char drive = 'A'; drive <= 'Z'; drive++) {
         if (driveMask & (1 << (drive - 'A'))) {
             std::string driveName = std::string(1, drive) + ":\\";
-            scanDrive(driveName);
+            ULARGE_INTEGER freeBytesAvailable, totalNumberOfBytes, totalNumberOfFreeBytes;
+            if (GetDiskFreeSpaceEx(driveName.c_str(), &freeBytesAvailable, &totalNumberOfBytes, &totalNumberOfFreeBytes)) {
+                totalUsedSpace += (totalNumberOfBytes.QuadPart - totalNumberOfFreeBytes.QuadPart);
+                scanDrive(driveName);
+            }
         }
     }
+
+    std::cout << "\nTotal used space across all drives: " << formatSize(totalUsedSpace) << std::endl;
 }
 
 // Function to display all drives
@@ -186,6 +204,22 @@ void showAllDrives() {
     std::cout << std::endl;
 }
 
+// Function to validate user input
+int getValidatedInput() {
+    int choice;
+    while (true) {
+        std::cin >> choice;
+        if (std::cin.fail() || choice < 1 || choice > 5) {
+            std::cin.clear(); // Clear error flags
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // Discard invalid input
+            std::cout << "Invalid input. Please enter a number between 1 and 5: ";
+        } else {
+            break;
+        }
+    }
+    return choice;
+}
+
 // Main function
 int main() {
     while (true) {
@@ -197,8 +231,7 @@ int main() {
         std::cout << "5. Exit\n";
         std::cout << "Enter your choice: ";
 
-        int choice;
-        std::cin >> choice;
+        int choice = getValidatedInput();
 
         switch (choice) {
             case 1:
@@ -218,13 +251,9 @@ int main() {
             case 5:
                 std::cout << "Exiting program." << std::endl;
                 return 0;
-            default:
-                std::cout << "Invalid choice. Please try again." << std::endl;
-                break;
         }
     }
 }
-
 
 
 
